@@ -1,0 +1,14 @@
+name: Debug Check Run Event
+
+on:
+  check_run:
+    types: [completed, created, rerequested] # Listen to more types for debugging
+
+jobs:
+  log_event_details:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump github.event context
+        id: dump
+        run: |
+          echo "github.event: ${{ toJson(github.event) }}" 

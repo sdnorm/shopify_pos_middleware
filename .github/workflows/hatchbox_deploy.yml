@@ -39,27 +39,10 @@ on:
   status: # No types needed for status, it triggers on any status update
 
 jobs:
-  deploy_on_signoff_check_success:
-    name: Deploy to Hatchbox on Signoff
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.check_run.head_sha }} # Checkout the specific commit
-
-      - name: Log Deployment Info
-        run: |
-          echo "Successful signoff check run detected: '${{ github.event.check_run.name }}' for commit ${{ github.event.check_run.head_sha }}."
-          echo "Attempting to deploy commit ${{ github.event.check_run.head_sha }} using Hatchbox Deploy Action."
-          if [ -z "${{ secrets.HATCHBOX_DEPLOY_KEY }}" ]; then
-            echo "Error: HATCHBOX_DEPLOY_KEY secret is not set or is empty."
-            echo "Please configure the HATCHBOX_DEPLOY_KEY secret in your repository settings."
-            exit 1
-          fi
-
-      - name: Trigger Hatchbox Deployment
-        uses: hatchboxio/github-hatchbox-deploy-action@v2
-        with:
-          deploy_key: ${{ secrets.HATCHBOX_DEPLOY_KEY }}
-          sha: ${{ github.event.check_run.head_sha }} 
+    - uses: actions/checkout@v4
+    - uses: hatchboxio/github-hatchbox-deploy-action@v2
+      with:
+        deploy_key: ${{ secrets.HATCHBOX_DEPLOY_KEY }}

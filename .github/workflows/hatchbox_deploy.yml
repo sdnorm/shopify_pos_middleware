@@ -1,0 +1,121 @@
+name: Deploy to Hatchbox on PR Approval with gh-signoff
+
+# This workflow deploys code to Hatchbox when a pull request (PR) is approved
+# and the approval comment indicates that 'gh signoff' (or a similar sign-off process)
+# has been acknowledged, and explicitly requests deployment.
+#
+# How it works:
+# 1. Trigger: Activates when a PR review is submitted.
+# 2. Conditions for running:
+#    - The review state must be 'approved'.
+#    - The review comment body must contain the phrase "gh signoff".
+#      (e.g., "LGTM, gh signoff, deploy pr" or "Approved, gh signoff, deploy latest").
+# 3. Deployment Type (controlled by review comment):
+#    - If the review comment also contains "deploy latest" (after "gh signoff"),
+#      it triggers a deployment of the latest version using Hatchbox's `?latest=true`.
+#    - Otherwise (if only "gh signoff" is present, or "gh signoff deploy pr" or similar),
+#      it deploys the specific head commit of the approved pull request (`?sha=[COMMIT_SHA]`).
+# 4. Secrets:
+#    - `HATCHBOX_DEPLOY_KEY`: You must configure this secret in your GitHub repository settings.
+#      It's the deploy key provided by Hatchbox for webhook deployments.
+#      (See Hatchbox documentation: App -> Settings -> Deployments -> Webhook URL).
+#
+# gh-signoff Integration Context:
+# This workflow assumes that your team uses a process like `gh-signoff` (https://github.com/basecamp/gh-signoff)
+# to ensure commits are properly signed off (e.g., containing "Signed off by: ...").
+# The "gh signoff" phrase in the approval comment acts as a confirmation from the reviewer
+# that this due diligence has been completed for the PR and it's ready for deployment.
+# The workflow itself *does not* inspect commit messages for "Signed off by:" lines;
+# it relies on the reviewer's explicit comment.
+#
+# Example Approval Comments to Trigger Deployment:
+# - To deploy the PR's specific commit:
+#   "Looks good, gh signoff deploy pr"
+#   "gh signoff, please deploy this PR" (defaults to PR SHA)
+#
+# - To deploy the "latest" version (as defined by Hatchbox):
+#   "gh signoff deploy latest"
+#
+# Error Handling:
+# The workflow logs the actions and exits with an error if the Hatchbox deploy key is missing
+# or if the POST request to Hatchbox fails (non-2xx HTTP status code).
+# The response body from Hatchbox (if any) is also logged.
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  deploy_to_hatchbox:
+    name: Deploy to Hatchbox
+    runs-on: ubuntu-latest
+    if: |
+      github.event.review.state == 'approved' &&
+      contains(github.event.review.body, 'gh signoff')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Determine Hatchbox URL and Deployment Info
+        id: deploy_info
+        env:
+          REVIEW_BODY: ${{ github.event.review.body }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          HATCHBOX_BASE_URL: "https://app.hatchbox.io/webhooks/deployments/${{ secrets.HATCHBOX_DEPLOY_KEY }}"
+        run: |
+          echo "Review body received: "$REVIEW_BODY""
+          DEPLOY_TYPE="specific commit"
+          TARGET_URL="$HATCHBOX_BASE_URL?sha=$PR_SHA"
+          DEPLOY_MESSAGE="Deploying PR commit SHA $PR_SHA to Hatchbox."
+
+          if [[ "$REVIEW_BODY" == *"deploy latest"* ]]; then
+            DEPLOY_TYPE="latest commit"
+            TARGET_URL="$HATCHBOX_BASE_URL?latest=true"
+            DEPLOY_MESSAGE="Deploying latest commit to Hatchbox (as per 'deploy latest' in review comment)."
+          fi
+
+          echo "Deployment Type: $DEPLOY_TYPE"
+          echo "Target URL: $TARGET_URL"
+          echo "$DEPLOY_MESSAGE"
+
+          echo "target_url=$TARGET_URL" >> $GITHUB_OUTPUT
+          echo "deploy_message=$DEPLOY_MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: Trigger Hatchbox Deployment
+        env:
+          HATCHBOX_TARGET_URL: ${{ steps.deploy_info.outputs.target_url }}
+          DEPLOY_MESSAGE: ${{ steps.deploy_info.outputs.deploy_message }}
+          HATCHBOX_DEPLOY_KEY_PRESENT: ${{ secrets.HATCHBOX_DEPLOY_KEY != '' }}
+        run: |
+          echo "$DEPLOY_MESSAGE"
+          echo "Attempting to trigger deployment using URL: $HATCHBOX_TARGET_URL"
+
+          if [ "$HATCHBOX_DEPLOY_KEY_PRESENT" != "true" ]; then
+            echo "Error: HATCHBOX_DEPLOY_KEY secret is not set or is empty."
+            echo "Please configure the HATCHBOX_DEPLOY_KEY secret in your repository settings."
+            exit 1
+          fi
+
+          # Send POST request and capture body and HTTP code
+          # Create a temporary file for the response body
+          RESPONSE_BODY_FILE=$(mktemp)
+          
+          HTTP_STATUS_CODE=$(curl -s -w "%{http_code}" -X POST "$HATCHBOX_TARGET_URL" -o "$RESPONSE_BODY_FILE")
+
+          echo "Hatchbox API response status code: $HTTP_STATUS_CODE"
+          if [ -s "$RESPONSE_BODY_FILE" ]; then
+            echo "Hatchbox API response body:"
+            cat "$RESPONSE_BODY_FILE"
+          else
+            echo "Hatchbox API response body: (empty)"
+          fi
+          rm "$RESPONSE_BODY_FILE" # Clean up temp file
+
+          if [ "$HTTP_STATUS_CODE" -ge 200 ] && [ "$HTTP_STATUS_CODE" -lt 300 ]; then
+            echo "Successfully triggered Hatchbox deployment."
+          else
+            echo "Error: Hatchbox deployment failed. HTTP Status: $HTTP_STATUS_CODE"
+            exit 1
+          fi 

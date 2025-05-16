@@ -1,14 +1,19 @@
-name: Debug Check Run Event
+name: Debug Check and Status Events
 
 on:
   check_run:
-    types: [completed, created, rerequested] # Listen to more types for debugging
+    types: [completed, created, rerequested]
+  check_suite:
+    types: [completed]
+  status: # No types needed for status, it triggers on any status update
 
 jobs:
   log_event_details:
     runs-on: ubuntu-latest
     steps:
+      - name: Dump GITHUB_EVENT_NAME context
+        run: |
+          echo "Event name: ${{ github.event_name }}"
       - name: Dump github.event context
-        id: dump
         run: |
           echo "github.event: ${{ toJson(github.event) }}" 

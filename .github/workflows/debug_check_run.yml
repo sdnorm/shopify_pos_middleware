@@ -1,8 +1,8 @@
 name: Debug Check and Status Events
 
 on:
-  check_run:
-    types: [completed, created, rerequested]
+  # check_run:
+  #   types: [completed, created, rerequested]
   check_suite:
     types: [completed]
   status: # No types needed for status, it triggers on any status update

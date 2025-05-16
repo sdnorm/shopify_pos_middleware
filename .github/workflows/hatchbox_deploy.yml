@@ -32,7 +32,7 @@ name: Deploy to Hatchbox on Successful 'gh signoff' Check
 # - The deployment will always be for the specific commit that the "signoff" check passed on.
 
 on:
-  check_run:
+  check_suite:
     types: [completed]
 
 jobs:

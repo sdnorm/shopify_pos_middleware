@@ -2,22 +2,21 @@ name: Deploy to Hatchbox on Successful 'gh signoff' Check
 
 # This workflow deploys code to Hatchbox when a specific 'signoff' check run,
 # typically created by a tool like 'gh signoff' (https://github.com/basecamp/gh-signoff),
-# completes successfully for a commit.
+# completes successfully for a commit. It uses the official Hatchbox Deploy Action.
 #
 # How it works:
 # 1. Trigger: Activates when a 'check_run' event occurs with the type 'completed'.
 # 2. Conditions for running the deployment job:
 #    - The completed check run's name must start with "signoff" (e.g., "signoff - Your Name signed off").
 #    - The conclusion of this "signoff" check run must be 'success'.
-#    - The check run should ideally be associated with a pull request (though deployment uses the commit SHA).
+#    - The check run should ideally be associated with a pull request.
 # 3. Deployment:
+#    - It uses the 'hatchboxio/github-hatchbox-deploy-action@v2' to trigger the deployment.
 #    - It deploys the specific commit SHA (`head_sha`) associated with the successful "signoff" check run.
-#    - The Hatchbox webhook URL used will be for deploying a specific commit:
-#      `https://app.hatchbox.io/webhooks/deployments/[DEPLOY_KEY]?sha=[COMMIT_SHA]`
 # 4. Secrets:
 #    - `HATCHBOX_DEPLOY_KEY`: You must configure this secret in your GitHub repository settings.
 #      It's the deploy key provided by Hatchbox for webhook deployments.
-#      (See Hatchbox documentation: App -> Settings -> Deployments -> Webhook URL).
+#      (See Hatchbox documentation: App -> Settings -> Deployments -> Webhook URL, or their action marketplace page).
 #
 # Integration with 'gh signoff' CLI or similar tools:
 # This workflow is designed to work in conjunction with tools or processes that
@@ -31,11 +30,6 @@ name: Deploy to Hatchbox on Successful 'gh signoff' Check
 #   all other necessary checks (tests, linting, security scans) have passed for the commit.
 #   This workflow deploys based on the success of the "signoff" check alone.
 # - The deployment will always be for the specific commit that the "signoff" check passed on.
-#
-# Error Handling:
-# The workflow logs actions and exits with an error if the Hatchbox deploy key is missing
-# or if the POST request to Hatchbox fails (non-2xx HTTP status code).
-# The response body from Hatchbox (if any) is also logged.
 
 on:
   check_run:
@@ -53,58 +47,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.check_run.head_sha }}
+          ref: ${{ github.event.check_run.head_sha }} # Checkout the specific commit
 
-      - name: Prepare Deployment Details
-        id: deploy_info
-        env:
-          COMMIT_SHA: ${{ github.event.check_run.head_sha }}
-          CHECK_RUN_NAME: ${{ github.event.check_run.name }}
-          HATCHBOX_BASE_URL: "https://app.hatchbox.io/webhooks/deployments/${{ secrets.HATCHBOX_DEPLOY_KEY }}"
+      - name: Log Deployment Info
         run: |
-          echo "Successful signoff check run detected: '$CHECK_RUN_NAME' for commit $COMMIT_SHA."
-          TARGET_URL="$HATCHBOX_BASE_URL?sha=$COMMIT_SHA"
-          DEPLOY_MESSAGE="Deploying commit $COMMIT_SHA to Hatchbox after successful signoff check ('$CHECK_RUN_NAME')."
-
-          echo "Target URL: $TARGET_URL"
-          echo "$DEPLOY_MESSAGE"
-
-          echo "target_url=$TARGET_URL" >> $GITHUB_OUTPUT
-          echo "deploy_message=$DEPLOY_MESSAGE" >> $GITHUB_OUTPUT
-
-      - name: Trigger Hatchbox Deployment
-        env:
-          HATCHBOX_TARGET_URL: ${{ steps.deploy_info.outputs.target_url }}
-          DEPLOY_MESSAGE: ${{ steps.deploy_info.outputs.deploy_message }}
-          HATCHBOX_DEPLOY_KEY_PRESENT: ${{ secrets.HATCHBOX_DEPLOY_KEY != '' }}
-        run: |
-          echo "$DEPLOY_MESSAGE"
-          echo "Attempting to trigger deployment using URL: $HATCHBOX_TARGET_URL"
-
-          if [ "$HATCHBOX_DEPLOY_KEY_PRESENT" != "true" ]; then
+          echo "Successful signoff check run detected: '${{ github.event.check_run.name }}' for commit ${{ github.event.check_run.head_sha }}."
+          echo "Attempting to deploy commit ${{ github.event.check_run.head_sha }} using Hatchbox Deploy Action."
+          if [ -z "${{ secrets.HATCHBOX_DEPLOY_KEY }}" ]; then
             echo "Error: HATCHBOX_DEPLOY_KEY secret is not set or is empty."
             echo "Please configure the HATCHBOX_DEPLOY_KEY secret in your repository settings."
             exit 1
           fi
 
-          # Send POST request and capture body and HTTP code
-          # Create a temporary file for the response body
-          RESPONSE_BODY_FILE=$(mktemp)
-          
-          HTTP_STATUS_CODE=$(curl -s -w "%{http_code}" -X POST "$HATCHBOX_TARGET_URL" -o "$RESPONSE_BODY_FILE")
-
-          echo "Hatchbox API response status code: $HTTP_STATUS_CODE"
-          if [ -s "$RESPONSE_BODY_FILE" ]; then
-            echo "Hatchbox API response body:"
-            cat "$RESPONSE_BODY_FILE"
-          else
-            echo "Hatchbox API response body: (empty)"
-          fi
-          rm "$RESPONSE_BODY_FILE" # Clean up temp file
-
-          if [ "$HTTP_STATUS_CODE" -ge 200 ] && [ "$HTTP_STATUS_CODE" -lt 300 ]; then
-            echo "Successfully triggered Hatchbox deployment."
-          else
-            echo "Error: Hatchbox deployment failed. HTTP Status: $HTTP_STATUS_CODE"
-            exit 1
-          fi 
+      - name: Trigger Hatchbox Deployment
+        uses: hatchboxio/github-hatchbox-deploy-action@v2
+        with:
+          deploy_key: ${{ secrets.HATCHBOX_DEPLOY_KEY }}
+          sha: ${{ github.event.check_run.head_sha }} 

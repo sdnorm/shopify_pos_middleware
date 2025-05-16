@@ -32,8 +32,11 @@ name: Deploy to Hatchbox on Successful 'gh signoff' Check
 # - The deployment will always be for the specific commit that the "signoff" check passed on.
 
 on:
+  # check_run:
+  #   types: [completed, created, rerequested]
   check_suite:
     types: [completed]
+  status: # No types needed for status, it triggers on any status update
 
 jobs:
   deploy_on_signoff_check_success:

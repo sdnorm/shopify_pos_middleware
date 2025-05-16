@@ -1,82 +1,71 @@
-name: Deploy to Hatchbox on PR Approval with gh-signoff
+name: Deploy to Hatchbox on Successful 'gh signoff' Check
 
-# This workflow deploys code to Hatchbox when a pull request (PR) is approved
-# and the approval comment indicates that 'gh signoff' (or a similar sign-off process)
-# has been acknowledged, and explicitly requests deployment.
+# This workflow deploys code to Hatchbox when a specific 'signoff' check run,
+# typically created by a tool like 'gh signoff' (https://github.com/basecamp/gh-signoff),
+# completes successfully for a commit.
 #
 # How it works:
-# 1. Trigger: Activates when a PR review is submitted.
-# 2. Conditions for running:
-#    - The review state must be 'approved'.
-#    - The review comment body must contain the phrase "gh signoff".
-#      (e.g., "LGTM, gh signoff, deploy pr" or "Approved, gh signoff, deploy latest").
-# 3. Deployment Type (controlled by review comment):
-#    - If the review comment also contains "deploy latest" (after "gh signoff"),
-#      it triggers a deployment of the latest version using Hatchbox's `?latest=true`.
-#    - Otherwise (if only "gh signoff" is present, or "gh signoff deploy pr" or similar),
-#      it deploys the specific head commit of the approved pull request (`?sha=[COMMIT_SHA]`).
+# 1. Trigger: Activates when a 'check_run' event occurs with the type 'completed'.
+# 2. Conditions for running the deployment job:
+#    - The completed check run's name must start with "signoff" (e.g., "signoff - Your Name signed off").
+#    - The conclusion of this "signoff" check run must be 'success'.
+#    - The check run should ideally be associated with a pull request (though deployment uses the commit SHA).
+# 3. Deployment:
+#    - It deploys the specific commit SHA (`head_sha`) associated with the successful "signoff" check run.
+#    - The Hatchbox webhook URL used will be for deploying a specific commit:
+#      `https://app.hatchbox.io/webhooks/deployments/[DEPLOY_KEY]?sha=[COMMIT_SHA]`
 # 4. Secrets:
 #    - `HATCHBOX_DEPLOY_KEY`: You must configure this secret in your GitHub repository settings.
 #      It's the deploy key provided by Hatchbox for webhook deployments.
 #      (See Hatchbox documentation: App -> Settings -> Deployments -> Webhook URL).
 #
-# gh-signoff Integration Context:
-# This workflow assumes that your team uses a process like `gh-signoff` (https://github.com/basecamp/gh-signoff)
-# to ensure commits are properly signed off (e.g., containing "Signed off by: ...").
-# The "gh signoff" phrase in the approval comment acts as a confirmation from the reviewer
-# that this due diligence has been completed for the PR and it's ready for deployment.
-# The workflow itself *does not* inspect commit messages for "Signed off by:" lines;
-# it relies on the reviewer's explicit comment.
+# Integration with 'gh signoff' CLI or similar tools:
+# This workflow is designed to work in conjunction with tools or processes that
+# update a commit's status via GitHub Checks API, specifically creating a check run
+# named starting with "signoff". When you run `gh signoff` locally for a commit,
+# and it reports success to GitHub by creating/updating a check run, this workflow
+# will detect the successful completion of that specific "signoff" check and proceed to deploy.
 #
-# Example Approval Comments to Trigger Deployment:
-# - To deploy the PR's specific commit:
-#   "Looks good, gh signoff deploy pr"
-#   "gh signoff, please deploy this PR" (defaults to PR SHA)
-#
-# - To deploy the "latest" version (as defined by Hatchbox):
-#   "gh signoff deploy latest"
+# Important Considerations:
+# - Ensure that the "signoff" check is configured to run or be reported only after
+#   all other necessary checks (tests, linting, security scans) have passed for the commit.
+#   This workflow deploys based on the success of the "signoff" check alone.
+# - The deployment will always be for the specific commit that the "signoff" check passed on.
 #
 # Error Handling:
-# The workflow logs the actions and exits with an error if the Hatchbox deploy key is missing
+# The workflow logs actions and exits with an error if the Hatchbox deploy key is missing
 # or if the POST request to Hatchbox fails (non-2xx HTTP status code).
 # The response body from Hatchbox (if any) is also logged.
 
 on:
-  pull_request_review:
-    types: [submitted]
+  check_run:
+    types: [completed]
 
 jobs:
-  deploy_to_hatchbox:
-    name: Deploy to Hatchbox
+  deploy_on_signoff_check_success:
+    name: Deploy to Hatchbox on Signoff
     runs-on: ubuntu-latest
     if: |
-      github.event.review.state == 'approved' &&
-      contains(github.event.review.body, 'gh signoff')
+      startsWith(github.event.check_run.name, 'signoff') &&
+      github.event.check_run.conclusion == 'success' &&
+      github.event.check_run.pull_requests[0] != null
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.check_run.head_sha }}
 
-      - name: Determine Hatchbox URL and Deployment Info
+      - name: Prepare Deployment Details
         id: deploy_info
         env:
-          REVIEW_BODY: ${{ github.event.review.body }}
-          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          COMMIT_SHA: ${{ github.event.check_run.head_sha }}
+          CHECK_RUN_NAME: ${{ github.event.check_run.name }}
           HATCHBOX_BASE_URL: "https://app.hatchbox.io/webhooks/deployments/${{ secrets.HATCHBOX_DEPLOY_KEY }}"
         run: |
-          echo "Review body received: "$REVIEW_BODY""
-          DEPLOY_TYPE="specific commit"
-          TARGET_URL="$HATCHBOX_BASE_URL?sha=$PR_SHA"
-          DEPLOY_MESSAGE="Deploying PR commit SHA $PR_SHA to Hatchbox."
+          echo "Successful signoff check run detected: '$CHECK_RUN_NAME' for commit $COMMIT_SHA."
+          TARGET_URL="$HATCHBOX_BASE_URL?sha=$COMMIT_SHA"
+          DEPLOY_MESSAGE="Deploying commit $COMMIT_SHA to Hatchbox after successful signoff check ('$CHECK_RUN_NAME')."
 
-          if [[ "$REVIEW_BODY" == *"deploy latest"* ]]; then
-            DEPLOY_TYPE="latest commit"
-            TARGET_URL="$HATCHBOX_BASE_URL?latest=true"
-            DEPLOY_MESSAGE="Deploying latest commit to Hatchbox (as per 'deploy latest' in review comment)."
-          fi
-
-          echo "Deployment Type: $DEPLOY_TYPE"
           echo "Target URL: $TARGET_URL"
           echo "$DEPLOY_MESSAGE"
 
